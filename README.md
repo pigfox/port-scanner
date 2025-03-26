@@ -1,5 +1,33 @@
 # port-scanner
 
+## Features
+
+This port scanner includes several key features:
+
+- **Concurrent Scanning**: Uses goroutines to scan multiple ports and IPs simultaneously
+- **Timeout Control**: Configurable timeout for each connection attempt
+- **Result Collection**: Stores results in a structured format
+- **IP Range Support**: Can scan a range of IP addresses
+
+## Scanning All Possible IPs
+
+To use this for "all possible IPs", you would theoretically set:
+```
+-start=0.0.0.0 -end=255.255.255.255
+```
+
+However, there are important considerations and limitations:
+
+### Practicality
+Scanning all 4.3 billion IPv4 addresses is not feasible:
+- Would take years to complete
+- Would likely get your IP blocked by many networks
+- Could be considered malicious activity
+
+### Resource Usage
+- Would consume significant bandwidth and system resources
+- Could overwhelm your network connection
+
 ## Usage
 ## Compilation
 

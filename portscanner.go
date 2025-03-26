@@ -94,7 +94,7 @@ func parsePorts(portStr string) []int {
 func main() {
 	startIP := flag.String("start", "192.168.1.1", "Starting IP address")
 	endIP := flag.String("end", "192.168.1.10", "Ending IP address")
-	portList := flag.String("ports", "22,80,443", "Comma-separated list of ports")
+	portList := flag.String("ports", "25", "Comma-separated list of ports") //"25,80,443"
 	timeout := flag.Duration("timeout", 2*time.Second, "Connection timeout")
 	maxConcurrent := flag.Int("concurrent", 50, "Maximum concurrent scans")
 	flag.Parse()
