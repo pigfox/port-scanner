@@ -5,15 +5,19 @@ import (
 	"compress/gzip"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 var brevo Brevo
+var email Email
 
 type ScanResult struct {
 	IP    string
@@ -23,9 +27,21 @@ type ScanResult struct {
 }
 
 func init() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
 	brevourl := os.Getenv("BREVO_URL")
 	brevoapi := os.Getenv("BREVO_APIKEY")
 	brevo = Brevo{URL: brevourl, APIKEY: brevoapi}
+	email = Email{
+		SenderName:  "Port Scanner Bot",
+		SenderEmail: os.Getenv("SENDER_EMAIL"),
+		ToName:      "Admin",
+		ToEmail:     os.Getenv("TO_EMAIL"),
+		Subject:     "Port Scan Results",
+		Msg:         "",
+	}
 }
 
 func scanPort(ip string, port int, timeout time.Duration, limiter chan struct{}) ScanResult {
@@ -236,6 +252,9 @@ func main() {
 	checkpointFile := flag.String("checkpoint", "checkpoint.txt", "Checkpoint file for resuming")
 	compress := flag.Bool("compress", false, "Compress output file with gzip")
 	flag.Parse()
+
+	email.Msg = "Starting scan from " + *startIP + " to " + *endIP + " on ports " + *portList
+	send(email)
 
 	// Start the timer
 	startTime := time.Now()

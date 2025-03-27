@@ -5,29 +5,44 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
+
+var senderName = "Port Scanner Bot"
+var senderEmail = ""
+var toName = "Admin"
+
+type Email struct {
+	SenderName  string
+	SenderEmail string
+	ToName      string
+	ToEmail     string
+	Subject     string
+	Msg         string
+}
 
 type Brevo struct {
 	URL    string
 	APIKEY string
 }
 
-func email(p map[string]string) int {
+func send(p Email) int {
+	p.Msg += " on " + time.Now().Format("2006-01-02 15:04:05") + " in timezone " + time.Now().Location().String()
 	method := "POST"
-	html := "<html><head></head><body><p>" + p["msg"] + "</p></body></html>"
+	html := "<html><head></head><body><p>" + p.Msg + "</p></body></html>"
 
 	payload := map[string]interface{}{
 		"sender": map[string]string{
-			"name":  p["sender_name"],
-			"email": p["sender_email"],
+			"name":  p.SenderName,
+			"email": p.SenderEmail,
 		},
 		"to": []map[string]string{
 			{
-				"email": p["to_email"],
-				"name":  p["to_name"],
+				"email": p.ToEmail,
+				"name":  p.ToName,
 			},
 		},
-		"subject":     "" + p["subject"] + "",
+		"subject":     "" + p.Subject + "",
 		"htmlContent": "" + html + "",
 	}
 	jsonData, err := json.Marshal(payload)
@@ -35,7 +50,6 @@ func email(p map[string]string) int {
 		fmt.Println(err)
 		return 500
 	}
-	fmt.Println(string(jsonData))
 
 	// Create a new request using http
 	client := &http.Client{}

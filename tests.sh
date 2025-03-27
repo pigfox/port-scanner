@@ -3,4 +3,4 @@ set -e
 set -x       
 clear   
 
-go test -v -cover
+go test -v -cover -cpuprofile=cpu.prof -memprofile=mem.prof -bench=.
