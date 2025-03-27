@@ -149,7 +149,7 @@ func TestSaveCheckpoint(t *testing.T) {
 }
 
 func TestLoadCheckpoint(t *testing.T) {
-	tempFile := "test_checkpoint.txt"
+	tempFile := "test_checkpoint_load.txt"
 	defer os.Remove(tempFile)
 
 	ip, err := loadCheckpoint(tempFile)
@@ -168,7 +168,7 @@ func TestLoadCheckpoint(t *testing.T) {
 	if err == nil {
 		t.Errorf("loadCheckpoint: expected error for unreadable file")
 	}
-	os.Chmod(tempFile, 0644)
+	os.Chmod(tempFile, 0644) // Reset permissions
 }
 
 func TestScanRange(t *testing.T) {
@@ -207,8 +207,8 @@ func TestScanRange(t *testing.T) {
 		t.Errorf("scanRange compress: %v", err)
 	}
 
-	// Test error cases
-	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, "/invalid/path/output", checkpointFile, false)
+	// Test invalid output file
+	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, "/nonexistent/invalid/output", checkpointFile, false)
 	if err == nil {
 		t.Errorf("scanRange: expected error for invalid output file")
 	}
@@ -220,22 +220,44 @@ func TestScanRange(t *testing.T) {
 	if err == nil {
 		t.Errorf("scanRange: expected error for invalid checkpoint file load")
 	}
-	os.Chmod(checkpointFile, 0644)
+	os.Chmod(checkpointFile, 0644) // Reset permissions
+
+	// Test resume beyond end
+	os.WriteFile(checkpointFile, []byte("192.168.1.3\n"), 0644)
+	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
+	if err != nil {
+		t.Errorf("scanRange resume beyond end: %v", err)
+	}
+
+	// Test full range
+	err = scanRange("0.0.0.0", "0.0.0.2", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
+	if err != nil {
+		t.Errorf("scanRange full range: %v", err)
+	}
+
+	// Test invalid range
+	err = scanRange("192.168.1.2", "192.168.1.1", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
+	if err == nil {
+		t.Errorf("scanRange: expected error for invalid range (end < start)")
+	}
 }
 
 func TestMain(t *testing.T) {
+	// Clean up any existing checkpoint file to avoid unexpected resumes
+	os.Remove("test_main_checkpoint.txt")
+
 	// Single run with custom args to cover all flags and timer
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 	os.Args = []string{
 		"portscanner",
 		"-start=192.168.1.1",
-		"-end=192.168.1.2",
+		"-end=192.168.1.5", // More IPs to extend runtime
 		"-ports=54321",
-		"-timeout=1ms",
-		"-concurrent=2",
+		"-timeout=1s",   // Slower timeout to ensure timer ticks
+		"-concurrent=1", // Slower concurrency to extend runtime
 		"-chunk=1",
-		"-parallel=true",
+		"-parallel=false", // Non-parallel to ensure sequential delay
 		"-output=test_main.txt",
 		"-checkpoint=test_main_checkpoint.txt",
 		"-compress=true",
@@ -249,7 +271,7 @@ func TestMain(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(1 * time.Second): // Allow timer to tick
+	case <-time.After(5 * time.Second): // Allow timer to tick at least once
 	}
 
 	// Cleanup

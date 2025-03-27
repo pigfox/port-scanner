@@ -91,7 +91,10 @@ func loadCheckpoint(checkpointFile string) (string, error) {
 func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxConcurrent, chunkSize int, parallelChunks bool, outputFile, checkpointFile string, compress bool) error {
 	start := ipToUint32(startIP)
 	end := ipToUint32(endIP)
-	totalIPs := end - start + 1
+	totalIPs := uint64(end) - uint64(start) + 1 // Use uint64 to avoid overflow
+	if totalIPs == 0 {                          // Only 0 if start > end after conversion
+		return fmt.Errorf("invalid IP range: start %s is greater than end %s", startIP, endIP)
+	}
 	fmt.Printf("Total IPs to scan: %d\n", totalIPs)
 
 	// Load checkpoint
@@ -101,10 +104,17 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 	}
 	if resumeIP != "" {
 		resume := ipToUint32(resumeIP)
-		if resume > start && resume <= end {
+		if resume >= start && resume <= end {
 			start = resume + 1
 			fmt.Printf("Resuming from %s\n", resumeIP)
 		}
+	}
+
+	// Recalculate totalIPs after resume
+	totalIPs = uint64(end) - uint64(start) + 1
+	if totalIPs == 0 {
+		fmt.Printf("Scan complete: resumed beyond end IP %s\n", endIP)
+		return nil
 	}
 
 	// Open output file
@@ -160,8 +170,11 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 		}
 
 		// Progress update
-		processed := chunkEnd - start + 1
+		processed := uint64(chunkEnd) - uint64(start) + 1
 		percent := float64(processed) / float64(totalIPs) * 100
+		if percent > 100 {
+			percent = 100
+		}
 		fmt.Printf("Progress: %.2f%% complete\n", percent)
 
 		// Flush periodically

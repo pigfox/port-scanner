@@ -1,5 +1,6 @@
 #!/bin/bash 
 set -e
-set -x          
+set -x       
+clear   
 
 go test -v -cover
