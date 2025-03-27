@@ -243,8 +243,8 @@ func parsePorts(portStr string) []int {
 }
 
 func main() {
-	defer recoverPanic()
-	go update()
+	//defer recoverPanic()
+	//go update()
 	startIP := flag.String("start", "192.168.1.1", "Starting IP address")
 	endIP := flag.String("end", "192.168.1.10", "Ending IP address")
 	portList := flag.String("ports", "25", "Comma-separated list of ports")
