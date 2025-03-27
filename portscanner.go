@@ -182,6 +182,9 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 			result := <-resultChan
 			if result.Open {
 				line := fmt.Sprintf("Port %d is open on %s\n", result.Port, result.IP)
+				email.Subject = "Open port found"
+				email.Msg = line
+				send(email)
 				if _, err := writer.WriteString(line); err != nil {
 					fmt.Printf("Error writing to file: %v\n", err)
 				}
@@ -241,6 +244,8 @@ func parsePorts(portStr string) []int {
 }
 
 func main() {
+	defer recoverPanic()
+	go update()
 	startIP := flag.String("start", "192.168.1.1", "Starting IP address")
 	endIP := flag.String("end", "192.168.1.10", "Ending IP address")
 	portList := flag.String("ports", "25", "Comma-separated list of ports")
@@ -288,4 +293,22 @@ func main() {
 	// Print total elapsed time
 	elapsed := time.Since(startTime)
 	fmt.Printf("Scan completed in %.2f minutes. Results saved to %s\n", elapsed.Minutes(), *outputFile)
+	//remove checkpoint file
+	os.Remove(*checkpointFile)
+	//remove output file
+	os.Remove(*outputFile)
+}
+
+func recoverPanic() {
+	if r := recover(); r != nil {
+		fmt.Printf("Recovered from panic: %v\n", r)
+	}
+}
+
+func update() {
+	// meke this go routine to run every 12 hrs
+	time.Sleep(12 * time.Hour)
+	email.Subject = "Update"
+	email.Msg = "Updating..."
+	send(email)
 }
