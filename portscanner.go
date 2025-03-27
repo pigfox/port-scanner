@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
+	"compress/gzip"
 	"flag"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,16 +41,13 @@ func scanPort(ip string, port int, timeout time.Duration, limiter chan struct{})
 	return result
 }
 
-func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxConcurrent int) []ScanResult {
-	var results []ScanResult
+func scanChunk(startIPNum, endIPNum uint32, ports []int, timeout time.Duration, maxConcurrent int, resultChan chan<- ScanResult) {
 	var wg sync.WaitGroup
-	resultChan := make(chan ScanResult, 100)
 	limiter := make(chan struct{}, maxConcurrent)
 
-	start := ipToUint32(startIP)
-	end := ipToUint32(endIP)
+	fmt.Printf("Scanning chunk from %s to %s\n", uint32ToIP(startIPNum), uint32ToIP(endIPNum))
 
-	for ipNum := start; ipNum <= end; ipNum++ {
+	for ipNum := startIPNum; ipNum <= endIPNum; ipNum++ {
 		ip := uint32ToIP(ipNum)
 		for _, port := range ports {
 			wg.Add(1)
@@ -58,16 +58,128 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 		}
 	}
 
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
+	wg.Wait()
+}
 
-	for result := range resultChan {
-		results = append(results, result)
+func saveCheckpoint(checkpointFile, lastIP string) error {
+	file, err := os.Create(checkpointFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString(lastIP + "\n")
+	return err
+}
+
+func loadCheckpoint(checkpointFile string) (string, error) {
+	file, err := os.Open(checkpointFile)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	if scanner.Scan() {
+		return scanner.Text(), nil
+	}
+	return "", nil
+}
+
+func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxConcurrent, chunkSize int, parallelChunks bool, outputFile, checkpointFile string, compress bool) error {
+	start := ipToUint32(startIP)
+	end := ipToUint32(endIP)
+	totalIPs := end - start + 1
+	fmt.Printf("Total IPs to scan: %d\n", totalIPs)
+
+	// Load checkpoint
+	resumeIP, err := loadCheckpoint(checkpointFile)
+	if err != nil {
+		return fmt.Errorf("failed to load checkpoint: %v", err)
+	}
+	if resumeIP != "" {
+		resume := ipToUint32(resumeIP)
+		if resume > start && resume <= end {
+			start = resume + 1
+			fmt.Printf("Resuming from %s\n", resumeIP)
+		}
 	}
 
-	return results
+	// Open output file
+	file, err := os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open output file: %v", err)
+	}
+	defer file.Close()
+
+	var writer *bufio.Writer
+	if compress {
+		gzWriter := gzip.NewWriter(file)
+		defer gzWriter.Close()
+		writer = bufio.NewWriter(gzWriter)
+	} else {
+		writer = bufio.NewWriter(file)
+	}
+	defer writer.Flush()
+
+	// Channel for results
+	resultChan := make(chan ScanResult, maxConcurrent)
+	var wg sync.WaitGroup
+
+	// Process chunks
+	for chunkStart := start; chunkStart <= end; chunkStart += uint32(chunkSize) {
+		chunkEnd := chunkStart + uint32(chunkSize) - 1
+		if chunkEnd > end {
+			chunkEnd = end
+		}
+
+		wg.Add(1)
+		go func(startNum, endNum uint32) {
+			defer wg.Done()
+			scanChunk(startNum, endNum, ports, timeout, maxConcurrent, resultChan)
+		}(chunkStart, chunkEnd)
+
+		// Collect results for this chunk
+		expectedResults := int(chunkEnd-chunkStart+1) * len(ports)
+		fmt.Printf("Expecting %d results for chunk %s to %s\n", expectedResults, uint32ToIP(chunkStart), uint32ToIP(chunkEnd))
+		for i := 0; i < expectedResults; i++ {
+			result := <-resultChan
+			if result.Open {
+				line := fmt.Sprintf("Port %d is open on %s\n", result.Port, result.IP)
+				if _, err := writer.WriteString(line); err != nil {
+					fmt.Printf("Error writing to file: %v\n", err)
+				}
+			}
+		}
+
+		// Save checkpoint
+		if err := saveCheckpoint(checkpointFile, uint32ToIP(chunkEnd)); err != nil {
+			fmt.Printf("Warning: failed to save checkpoint: %v\n", err)
+		}
+
+		// Progress update
+		processed := chunkEnd - start + 1
+		percent := float64(processed) / float64(totalIPs) * 100
+		fmt.Printf("Progress: %.2f%% complete\n", percent)
+
+		// Flush periodically
+		writer.Flush()
+
+		// Wait if not parallel
+		if !parallelChunks {
+			wg.Wait()
+		}
+	}
+
+	// Wait for all parallel chunks and close channel
+	if parallelChunks {
+		wg.Wait()
+	}
+	close(resultChan)
+
+	return nil
 }
 
 func ipToUint32(ipStr string) uint32 {
@@ -94,19 +206,46 @@ func parsePorts(portStr string) []int {
 func main() {
 	startIP := flag.String("start", "192.168.1.1", "Starting IP address")
 	endIP := flag.String("end", "192.168.1.10", "Ending IP address")
-	portList := flag.String("ports", "25", "Comma-separated list of ports") //"25,80,443"
+	portList := flag.String("ports", "25", "Comma-separated list of ports")
 	timeout := flag.Duration("timeout", 2*time.Second, "Connection timeout")
-	maxConcurrent := flag.Int("concurrent", 50, "Maximum concurrent scans")
+	maxConcurrent := flag.Int("concurrent", 1000, "Maximum concurrent scans per chunk")
+	chunkSize := flag.Int("chunk", 1000000, "Number of IPs per chunk (default: 1M)")
+	parallelChunks := flag.Bool("parallel", false, "Run chunks in parallel (experimental)")
+	outputFile := flag.String("output", "scan_results.txt", "Output file for results")
+	checkpointFile := flag.String("checkpoint", "checkpoint.txt", "Checkpoint file for resuming")
+	compress := flag.Bool("compress", false, "Compress output file with gzip")
 	flag.Parse()
 
-	ports := parsePorts(*portList)
-	results := scanRange(*startIP, *endIP, ports, *timeout, *maxConcurrent)
+	// Start the timer
+	startTime := time.Now()
 
-	for _, result := range results {
-		if result.Open {
-			fmt.Printf("Port %d is open on %s\n", result.Port, result.IP)
-		} else if result.Error != nil {
-			fmt.Printf("Error scanning %s:%d - %v\n", result.IP, result.Port, result.Error)
+	// Launch a goroutine to print elapsed time every minute
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				elapsed := time.Since(startTime)
+				fmt.Printf("Elapsed time: %.0f minutes\n", elapsed.Minutes())
+			case <-done:
+				return
+			}
 		}
+	}()
+
+	ports := parsePorts(*portList)
+	err := scanRange(*startIP, *endIP, ports, *timeout, *maxConcurrent, *chunkSize, *parallelChunks, *outputFile, *checkpointFile, *compress)
+	if err != nil {
+		fmt.Printf("Error during scan: %v\n", err)
+		os.Exit(1)
 	}
+
+	// Stop the timer goroutine
+	close(done)
+
+	// Print total elapsed time
+	elapsed := time.Since(startTime)
+	fmt.Printf("Scan completed in %.2f minutes. Results saved to %s\n", elapsed.Minutes(), *outputFile)
 }
