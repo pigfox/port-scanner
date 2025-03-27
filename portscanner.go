@@ -13,11 +13,19 @@ import (
 	"time"
 )
 
+var brevo Brevo
+
 type ScanResult struct {
 	IP    string
 	Port  int
 	Open  bool
 	Error error
+}
+
+func init() {
+	brevourl := os.Getenv("BREVO_URL")
+	brevoapi := os.Getenv("BREVO_APIKEY")
+	brevo = Brevo{URL: brevourl, APIKEY: brevoapi}
 }
 
 func scanPort(ip string, port int, timeout time.Duration, limiter chan struct{}) ScanResult {

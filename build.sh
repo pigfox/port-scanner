@@ -3,4 +3,4 @@ set -e
 set -x          
 clear
 
-go build portscanner.go
+go build -o portscanner *.go
