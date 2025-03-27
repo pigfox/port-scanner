@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strconv"
@@ -29,7 +28,7 @@ type ScanResult struct {
 func init() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		fmt.Println("Error loading .env file")
 	}
 	brevourl := os.Getenv("BREVO_URL")
 	brevoapi := os.Getenv("BREVO_APIKEY")
@@ -306,7 +305,6 @@ func recoverPanic() {
 }
 
 func update() {
-	// meke this go routine to run every 12 hrs
 	time.Sleep(12 * time.Hour)
 	email.Subject = "Update"
 	email.Msg = "Updating..."
