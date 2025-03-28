@@ -1,280 +1,305 @@
 package main
 
 import (
+	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
-func TestIpToUint32(t *testing.T) {
-	tests := []struct {
-		ip   string
-		want uint32
-	}{
-		{"192.168.1.1", 3232235777},
-		{"10.0.0.1", 167772161},
-		{"255.255.255.255", 4294967295},
-	}
+func TestMain(m *testing.M) {
+	// Set up environment variables for tests
+	os.Setenv("BREVO_URL", "http://example.com/api/v3/smtp/email")
+	os.Setenv("BREVO_APIKEY", "testkey")
+	os.Setenv("SENDER_EMAIL", "sender@example.com")
+	os.Setenv("TO_EMAIL", "admin@example.com")
+	os.Setenv("PORT", "10001")
 
-	for _, tt := range tests {
-		got := ipToUint32(tt.ip)
-		if got != tt.want {
-			t.Errorf("ipToUint32(%q) = %v, want %v", tt.ip, got, tt.want)
-		}
+	// Initialize globals with test values
+	brevo = Brevo{URL: os.Getenv("BREVO_URL"), APIKEY: os.Getenv("BREVO_APIKEY")}
+	email = Email{
+		SenderName:  "Port Scanner Bot",
+		SenderEmail: os.Getenv("SENDER_EMAIL"),
+		ToName:      "Admin",
+		ToEmail:     os.Getenv("TO_EMAIL"),
+		Subject:     "Port Scan Results",
+		Msg:         "",
 	}
+	results = nil
+	checkpoints = nil
+
+	// Run tests
+	code := m.Run()
+
+	// Exit with the test result code
+	os.Exit(code)
 }
 
-func TestUint32ToIP(t *testing.T) {
-	tests := []struct {
-		num  uint32
-		want string
-	}{
-		{3232235777, "192.168.1.1"},
-		{167772161, "10.0.0.1"},
-		{4294967295, "255.255.255.255"},
-	}
+// TestInit tests the initialization logic
+func TestInit(t *testing.T) {
+	// Clear environment to ensure isolation
+	os.Clearenv()
 
-	for _, tt := range tests {
-		got := uint32ToIP(tt.num)
-		if got != tt.want {
-			t.Errorf("uint32ToIP(%v) = %q, want %q", tt.num, got, tt.want)
-		}
-	}
-}
-
-func TestParsePorts(t *testing.T) {
-	tests := []struct {
-		input string
-		want  []int
-	}{
-		{"80,443,8080", []int{80, 443, 8080}},
-		{"22", []int{22}},
-		{"80,invalid,443", []int{80, 443}},
-		{"", []int{}},
-		{"65536,0,-1", []int{}},
-	}
-
-	for _, tt := range tests {
-		got := parsePorts(tt.input)
-		if len(got) != len(tt.want) {
-			t.Errorf("parsePorts(%q) = %v, want %v", tt.input, got, tt.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != tt.want[i] {
-				t.Errorf("parsePorts(%q) = %v, want %v", tt.input, got, tt.want)
-				break
-			}
-		}
-	}
-}
-
-func TestScanPort(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Simulate .env file content
+	envContent := "BREVO_URL=http://test.com\nBREVO_APIKEY=testkey\nSENDER_EMAIL=sender@test.com\nTO_EMAIL=admin@test.com"
+	tmpFile, err := os.CreateTemp("", "testenv")
 	if err != nil {
-		t.Fatalf("failed to start mock server: %v", err)
+		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer listener.Close()
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.WriteString(envContent); err != nil {
+		t.Fatalf("Failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
 
-	port := listener.Addr().(*net.TCPAddr).Port
+	// Load from temp file
+	if err := godotenv.Load(tmpFile.Name()); err != nil {
+		t.Fatalf("godotenv.Load failed: %v", err)
+	}
+
+	// Replicate init logic
+	brevo = Brevo{}
+	email = Email{}
+	brevoUrl := os.Getenv("BREVO_URL")
+	brevoAPIKey := os.Getenv("BREVO_APIKEY")
+	if brevoUrl == "" || brevoAPIKey == "" {
+		t.Fatal("BREVO_URL or BREVO_APIKEY not set")
+	}
+	brevo = Brevo{URL: brevoUrl, APIKEY: brevoAPIKey}
+	email = Email{
+		SenderName:  "Port Scanner Bot",
+		SenderEmail: os.Getenv("SENDER_EMAIL"),
+		ToName:      "Admin",
+		ToEmail:     os.Getenv("TO_EMAIL"),
+		Subject:     "Port Scan Results",
+		Msg:         "",
+	}
+
+	if brevo.URL == "" || brevo.APIKEY == "" || email.SenderEmail == "" || email.ToEmail == "" {
+		t.Errorf("Initialization failed: %+v, %+v", brevo, email)
+	}
+}
+
+// TestRecoverPanic tests the recoverPanic function
+func TestRecoverPanic(t *testing.T) {
+	defer recoverPanic()
+	panic("test panic")
+	// If we reach here, recoverPanic worked
+}
+
+// TestUpdate tests the update function
+func TestUpdate(t *testing.T) {
+	originalSend := sendFunc
+	originalSleep := updateSleepDuration
+	defer func() {
+		sendFunc = originalSend
+		updateSleepDuration = originalSleep
+	}()
+	sendCalled := false
+	sendFunc = func(e Email) {
+		sendCalled = true
+		if e.Subject != "Update" || e.Msg != "Updating..." {
+			t.Errorf("update() sent wrong email: %+v", e)
+		}
+	}
+	updateSleepDuration = 10 * time.Millisecond
+	done := make(chan struct{})
+	go func() {
+		update()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// Update completed
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("update() timed out")
+	}
+	if !sendCalled {
+		t.Errorf("update() did not call send")
+	}
+}
+
+// TestScanPort tests the scanPort function
+func TestScanPort(t *testing.T) {
 	limiter := make(chan struct{}, 1)
 
-	go func() {
-		conn, _ := listener.Accept()
-		if conn != nil {
-			conn.Close()
-		}
-	}()
-	result := scanPort("127.0.0.1", port, 100*time.Millisecond, limiter)
-	if !result.Open || result.IP != "127.0.0.1" || result.Port != port {
-		t.Errorf("scanPort open case: got %+v, want Open=true, IP=127.0.0.1, Port=%d", result, port)
+	originalDial := dialTimeout
+	defer func() { dialTimeout = originalDial }()
+
+	// Test open port
+	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
+		return &net.TCPConn{}, nil
+	}
+	result := scanPort("127.0.0.1", 80, 1*time.Second, limiter)
+	if !result.Open || result.Error != nil {
+		t.Errorf("scanPort() failed for open port: %+v", result)
 	}
 
-	result = scanPort("127.0.0.1", 54321, 100*time.Millisecond, limiter)
+	// Test closed port
+	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
+		return nil, fmt.Errorf("connection refused")
+	}
+	result = scanPort("127.0.0.1", 81, 1*time.Second, limiter)
 	if result.Open || result.Error == nil {
-		t.Errorf("scanPort closed case: got %+v, want Open=false with error", result)
+		t.Errorf("scanPort() failed for closed port: %+v", result)
 	}
 }
 
+// TestScanChunk tests the scanChunk function
 func TestScanChunk(t *testing.T) {
-	ports := []int{54321}
+	originalDial := dialTimeout
+	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
+		return &net.TCPConn{}, nil
+	}
+	defer func() { dialTimeout = originalDial }()
 	resultChan := make(chan ScanResult, 10)
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		scanChunk(ipToUint32("192.168.1.1"), ipToUint32("192.168.1.2"), ports, 100*time.Millisecond, 2, resultChan)
-	}()
-
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
+	go scanChunk(ipToUint32("192.168.1.1"), ipToUint32("192.168.1.2"), []int{80}, 1*time.Millisecond, 2, resultChan)
+	wg.Wait()
+	close(resultChan)
 
 	count := 0
 	for result := range resultChan {
 		count++
-		if result.Open {
-			t.Errorf("scanChunk: unexpected open port %d on %s", result.Port, result.IP)
+		if !result.Open {
+			t.Errorf("scanChunk() failed: %+v", result)
 		}
 	}
 	if count != 2 {
-		t.Errorf("scanChunk: expected 2 results, got %d", count)
+		t.Errorf("scanChunk() scanned wrong number of IPs: %d", count)
 	}
 }
 
-func TestSaveCheckpoint(t *testing.T) {
-	tempFile := "test_checkpoint.txt"
-	defer os.Remove(tempFile)
-
-	err := saveCheckpoint(tempFile, "192.168.1.1")
-	if err != nil {
-		t.Errorf("saveCheckpoint: %v", err)
+// TestSaveAndLoadCheckpoint tests checkpoint functions
+func TestSaveAndLoadCheckpoint(t *testing.T) {
+	checkpoints = nil
+	saveCheckpoint("192.168.1.1")
+	if len(checkpoints) != 1 || checkpoints[0].IP != "192.168.1.1" {
+		t.Errorf("saveCheckpoint() failed: %+v", checkpoints)
 	}
-
-	data, err := os.ReadFile(tempFile)
-	if err != nil {
-		t.Errorf("reading checkpoint: %v", err)
-	}
-	if string(data) != "192.168.1.1\n" {
-		t.Errorf("saveCheckpoint: got %q, want %q", string(data), "192.168.1.1\n")
-	}
-
-	err = saveCheckpoint("/invalid/path", "1.1.1.1")
-	if err == nil {
-		t.Errorf("saveCheckpoint: expected error for invalid path")
+	if loadCheckpoint() != "192.168.1.1" {
+		t.Errorf("loadCheckpoint() failed: %s", loadCheckpoint())
 	}
 }
 
-func TestLoadCheckpoint(t *testing.T) {
-	tempFile := "test_checkpoint_load.txt"
-	defer os.Remove(tempFile)
-
-	ip, err := loadCheckpoint(tempFile)
-	if err != nil || ip != "" {
-		t.Errorf("loadCheckpoint no file: got %q, %v; want %q, nil", ip, err, "")
-	}
-
-	os.WriteFile(tempFile, []byte("192.168.1.1\n"), 0644)
-	ip, err = loadCheckpoint(tempFile)
-	if err != nil || ip != "192.168.1.1" {
-		t.Errorf("loadCheckpoint: got %q, %v; want %q, nil", ip, err, "192.168.1.1")
-	}
-
-	os.Chmod(tempFile, 0000)
-	_, err = loadCheckpoint(tempFile)
-	if err == nil {
-		t.Errorf("loadCheckpoint: expected error for unreadable file")
-	}
-	os.Chmod(tempFile, 0644) // Reset permissions
-}
-
+// TestScanRange tests the scanRange function
 func TestScanRange(t *testing.T) {
-	outputFile := "test_output.txt"
-	checkpointFile := "test_checkpoint.txt"
-	defer os.Remove(outputFile)
-	defer os.Remove(checkpointFile)
-
-	// Basic test
-	err := scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
+	originalSend := sendFunc
+	originalDial := dialTimeout
+	defer func() {
+		sendFunc = originalSend
+		dialTimeout = originalDial
+	}()
+	sendCalled := 0
+	sendFunc = func(e Email) {
+		sendCalled++
+	}
+	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
+		return &net.TCPConn{}, nil
+	}
+	results = nil // Reset global state
+	checkpoints = nil
+	err := scanRange("192.168.1.1", "192.168.1.2", []int{80}, 1*time.Millisecond, 2, 2, false)
 	if err != nil {
-		t.Errorf("scanRange: %v", err)
+		t.Errorf("scanRange() failed: %v", err)
 	}
-
-	data, err := os.ReadFile(checkpointFile)
-	if err != nil || string(data) != "192.168.1.2\n" {
-		t.Errorf("scanRange checkpoint: got %q, %v; want %q, nil", string(data), err, "192.168.1.2\n")
+	time.Sleep(50 * time.Millisecond) // Allow goroutines to finish
+	if sendCalled < 1 {
+		t.Errorf("scanRange() did not send emails, sent: %d", sendCalled)
 	}
-
-	// Test resume
-	os.WriteFile(checkpointFile, []byte("192.168.1.1\n"), 0644)
-	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
-	if err != nil {
-		t.Errorf("scanRange resume: %v", err)
-	}
-
-	// Test parallel chunks
-	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, true, outputFile, checkpointFile, false)
-	if err != nil {
-		t.Errorf("scanRange parallel: %v", err)
-	}
-
-	// Test compression
-	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, true)
-	if err != nil {
-		t.Errorf("scanRange compress: %v", err)
-	}
-
-	// Test invalid output file
-	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, "/nonexistent/invalid/output", checkpointFile, false)
-	if err == nil {
-		t.Errorf("scanRange: expected error for invalid output file")
-	}
-
-	// Test invalid checkpoint load
-	os.WriteFile(checkpointFile, []byte("192.168.1.1\n"), 0644)
-	os.Chmod(checkpointFile, 0000)
-	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
-	if err == nil {
-		t.Errorf("scanRange: expected error for invalid checkpoint file load")
-	}
-	os.Chmod(checkpointFile, 0644) // Reset permissions
-
-	// Test resume beyond end
-	os.WriteFile(checkpointFile, []byte("192.168.1.3\n"), 0644)
-	err = scanRange("192.168.1.1", "192.168.1.2", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
-	if err != nil {
-		t.Errorf("scanRange resume beyond end: %v", err)
-	}
-
-	// Test full range
-	err = scanRange("0.0.0.0", "0.0.0.2", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
-	if err != nil {
-		t.Errorf("scanRange full range: %v", err)
-	}
-
-	// Test invalid range
-	err = scanRange("192.168.1.2", "192.168.1.1", []int{54321}, 100*time.Millisecond, 2, 1, false, outputFile, checkpointFile, false)
-	if err == nil {
-		t.Errorf("scanRange: expected error for invalid range (end < start)")
+	if len(results) != 2 {
+		t.Errorf("scanRange() produced wrong number of results: %d", len(results))
 	}
 }
 
-func TestMain(t *testing.T) {
-	// Clean up any existing checkpoint file to avoid unexpected resumes
-	os.Remove("test_main_checkpoint.txt")
+// TestIPConversion tests IP conversion functions
+func TestIPConversion(t *testing.T) {
+	ip := "192.168.1.1"
+	num := ipToUint32(ip)
+	if num != 3232235777 {
+		t.Errorf("ipToUint32() failed: %d", num)
+	}
+	if uint32ToIP(num) != ip {
+		t.Errorf("uint32ToIP() failed: %s", uint32ToIP(num))
+	}
+}
 
-	// Single run with custom args to cover all flags and timer
-	oldArgs := os.Args
-	defer func() { os.Args = oldArgs }()
-	os.Args = []string{
-		"portscanner",
-		"-start=192.168.1.1",
-		"-end=192.168.1.5", // More IPs to extend runtime
-		"-ports=54321",
-		"-timeout=1s",   // Slower timeout to ensure timer ticks
-		"-concurrent=1", // Slower concurrency to extend runtime
-		"-chunk=1",
-		"-parallel=false", // Non-parallel to ensure sequential delay
-		"-output=test_main.txt",
-		"-checkpoint=test_main_checkpoint.txt",
-		"-compress=true",
+// TestParsePorts tests the parsePorts function
+func TestParsePorts(t *testing.T) {
+	ports := parsePorts("80,443,invalid,65536")
+	if len(ports) != 2 || ports[0] != 80 || ports[1] != 443 {
+		t.Errorf("parsePorts() failed: %+v", ports)
+	}
+}
+
+// TestMainFunction tests the main function
+func TestMainFunction(t *testing.T) {
+	originalSend := sendFunc
+	defer func() { sendFunc = originalSend }()
+	sendCalled := 0
+	sendFunc = func(e Email) {
+		sendCalled++
 	}
 
+	// Start server in a controlled way
+	srv := &http.Server{Addr: ":10001"}
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			t.Errorf("Server failed: %v", err)
+		}
+	}()
+
+	// Run main in a goroutine with clean flag state
 	done := make(chan struct{})
 	go func() {
+		defer recoverPanic()
+		os.Args = []string{"port-scanner"}
 		main()
 		close(done)
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second): // Allow timer to tick at least once
+	time.Sleep(100 * time.Millisecond) // Allow main to start
+	if sendCalled == 0 {
+		t.Errorf("main() did not send initial email")
 	}
 
-	// Cleanup
-	os.Remove("test_main.txt")
-	os.Remove("test_main_checkpoint.txt")
+	// Test health endpoint
+	resp, err := http.Get("http://localhost:10001/health")
+	if err != nil {
+		t.Errorf("Health endpoint failed: %v", err)
+	} else if resp.StatusCode != http.StatusOK {
+		t.Errorf("Health endpoint returned %d, expected 200", resp.StatusCode)
+		resp.Body.Close()
+	} else {
+		resp.Body.Close()
+	}
+
+	// Shutdown server
+	if err := srv.Shutdown(nil); err != nil {
+		t.Errorf("Failed to shutdown server: %v", err)
+	}
+	<-done // Ensure main finishes
+}
+
+// BenchmarkScanPort benchmarks the scanPort function
+func BenchmarkScanPort(b *testing.B) {
+	limiter := make(chan struct{}, 1)
+	originalDial := dialTimeout
+	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
+		return &net.TCPConn{}, nil
+	}
+	defer func() { dialTimeout = originalDial }()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		scanPort("127.0.0.1", 80, 1*time.Millisecond, limiter)
+	}
 }

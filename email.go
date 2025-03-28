@@ -9,9 +9,8 @@ import (
 	"time"
 )
 
-var senderName = "Port Scanner Bot"
-var senderEmail = ""
-var toName = "Admin"
+// sendFunc is declared in main_test.go but needs to be accessible here
+var sendFunc func(Email) = func(e Email) {} // Default no-op
 
 // createPayload builds a valid JSON payload for Brevo API
 func createPayload(p Email) ([]byte, error) {
@@ -50,6 +49,7 @@ func createPayload(p Email) ([]byte, error) {
 
 // send function sends an email via Brevo API
 func send(p Email) int {
+	sendFunc(p)
 	jsonData, err := createPayload(p)
 	if err != nil {
 		fmt.Println("Error creating JSON payload:", err)

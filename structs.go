@@ -1,9 +1,23 @@
 package main
 
+import (
+	"net"
+	"time"
+)
+
 var brevo Brevo
 var email Email
 var results []ScanResult
 var checkpoints []Checkpoint
+
+// DialerFunc is a type for the dialer function
+type DialerFunc func(network, address string, timeout time.Duration) (net.Conn, error)
+
+// dialTimeout is the global dialer function, defaulting to net.DialTimeout
+var dialTimeout DialerFunc = net.DialTimeout
+
+// updateSleepDuration allows overriding the sleep time in tests
+var updateSleepDuration = 12 * time.Hour
 
 type ScanResult struct {
 	IP    string

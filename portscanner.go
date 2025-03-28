@@ -17,7 +17,7 @@ func scanPort(ip string, port int, timeout time.Duration, limiter chan struct{})
 	defer func() { <-limiter }()
 
 	address := fmt.Sprintf("%s:%d", ip, port)
-	conn, err := net.DialTimeout("tcp", address, timeout)
+	conn, err := dialTimeout("tcp", address, timeout)
 
 	result := ScanResult{
 		IP:    ip,
@@ -34,23 +34,23 @@ func scanPort(ip string, port int, timeout time.Duration, limiter chan struct{})
 }
 
 func scanChunk(startIPNum, endIPNum uint32, ports []int, timeout time.Duration, maxConcurrent int, resultChan chan<- ScanResult) {
-	var wg sync.WaitGroup
 	limiter := make(chan struct{}, maxConcurrent)
+	var innerWg sync.WaitGroup
 
 	fmt.Printf("Scanning chunk from %s to %s\n", uint32ToIP(startIPNum), uint32ToIP(endIPNum))
 
 	for ipNum := startIPNum; ipNum <= endIPNum; ipNum++ {
 		ip := uint32ToIP(ipNum)
 		for _, port := range ports {
-			wg.Add(1)
+			innerWg.Add(1)
 			go func(ip string, port int) {
-				defer wg.Done()
-				resultChan <- scanPort(ip, port, timeout, limiter)
+				defer innerWg.Done()
+				result := scanPort(ip, port, timeout, limiter)
+				resultChan <- result
 			}(ip, port)
 		}
 	}
-
-	wg.Wait()
+	innerWg.Wait()
 }
 
 func saveCheckpoint(lastIP string) {
@@ -68,7 +68,6 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 	start := ipToUint32(startIP)
 	end := ipToUint32(endIP)
 
-	// Load checkpoint
 	resumeIP := loadCheckpoint()
 	if resumeIP != "" {
 		resume := ipToUint32(resumeIP)
@@ -78,9 +77,23 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 		}
 	}
 
-	// Channel for results
 	resultChan := make(chan ScanResult, maxConcurrent)
 	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	// Collect results in a separate goroutine
+	go func() {
+		for result := range resultChan {
+			results = append(results, result)
+			if result.Open {
+				fmt.Printf("Port %d is open on %s\n", result.Port, result.IP)
+				email.Subject = "Open port found"
+				email.Msg = fmt.Sprintf("Port %d is open on %s", result.Port, result.IP)
+				send(email)
+			}
+		}
+		close(done)
+	}()
 
 	// Process chunks
 	for chunkStart := start; chunkStart <= end; chunkStart += uint32(chunkSize) {
@@ -95,24 +108,12 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 			scanChunk(startNum, endNum, ports, timeout, maxConcurrent, resultChan)
 		}(chunkStart, chunkEnd)
 
-		// Collect results
-		for i := 0; i < int(chunkEnd-chunkStart+1)*len(ports); i++ {
-			result := <-resultChan
-			results = append(results, result) // Store in-memory instead of writing to file
-			if result.Open {
-				fmt.Printf("Port %d is open on %s\n", result.Port, result.IP)
-				email.Subject = "Open port found"
-				email.Msg = fmt.Sprintf("Port %d is open on %s", result.Port, result.IP)
-				send(email)
-			}
-		}
-
-		// Save checkpoint
 		saveCheckpoint(uint32ToIP(chunkEnd))
 	}
 
 	wg.Wait()
-	close(resultChan)
+	close(resultChan) // Safe to close after all chunks are done
+	<-done            // Wait for result collection to finish
 
 	return nil
 }
@@ -140,9 +141,10 @@ func parsePorts(portStr string) []int {
 
 func main() {
 	fmt.Println("Starting port scanner")
-	//os.Exit(0)
 	defer recoverPanic()
 	go update()
+
+	// Flags
 	startIP := flag.String("start", "192.168.1.1", "Starting IP address")
 	endIP := flag.String("end", "192.168.1.10", "Ending IP address")
 	portList := flag.String("ports", "25", "Comma-separated list of ports")
@@ -183,11 +185,11 @@ func main() {
 
 	// Stop the timer goroutine
 	close(done)
-	//iterate over results and send email
+
+	// Iterate over results and send email
 	msgBuilder := strings.Builder{}
 	for _, result := range results {
 		if result.Open {
-			//fmt.Printf("Port %d is open on %s\n", result.Port, result.IP)
 			msgBuilder.WriteString(fmt.Sprintf("Port %d is open on %s\n\n", result.Port, result.IP))
 		}
 	}
@@ -198,7 +200,7 @@ func main() {
 
 	// Print total elapsed time
 	elapsed := time.Since(startTime)
-	fmt.Printf("Scan completed in %.2f minutes.", elapsed.Minutes())
+	fmt.Printf("Scan completed in %.2f minutes.\n", elapsed.Minutes())
 
 	port := os.Getenv("PORT")
 	if port == "" {

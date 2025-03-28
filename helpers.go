@@ -5,17 +5,15 @@ import (
 	"log"
 	"os"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 func init() {
-	/* render.com
-	liveENV := os.Getenv("LIVE_ENV")
-	if liveENV != "TRUE" {
-		err := godotenv.Load()
-		if err != nil {
-			log.Fatal("Error loading .env file")
-		}
-	}*/
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
 
 	brevoUrl := os.Getenv("BREVO_URL")
 	brevoAPIKey := os.Getenv("BREVO_APIKEY")
@@ -41,7 +39,7 @@ func recoverPanic() {
 }
 
 func update() {
-	time.Sleep(12 * time.Hour)
+	time.Sleep(updateSleepDuration)
 	email.Subject = "Update"
 	email.Msg = "Updating..."
 	send(email)
