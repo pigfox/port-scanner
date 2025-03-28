@@ -243,9 +243,9 @@ func parsePorts(portStr string) []int {
 }
 
 func main() {
-	os.Exit(0)
-	//defer recoverPanic()
-	//go update()
+	//os.Exit(0)
+	defer recoverPanic()
+	go update()
 	startIP := flag.String("start", "192.168.1.1", "Starting IP address")
 	endIP := flag.String("end", "192.168.1.10", "Ending IP address")
 	portList := flag.String("ports", "25", "Comma-separated list of ports")
@@ -294,9 +294,9 @@ func main() {
 	elapsed := time.Since(startTime)
 	fmt.Printf("Scan completed in %.2f minutes. Results saved to %s\n", elapsed.Minutes(), *outputFile)
 	//remove checkpoint file
-	os.Remove(*checkpointFile)
+	//os.Remove(*checkpointFile)
 	//remove output file
-	os.Remove(*outputFile)
+	//os.Remove(*outputFile)
 }
 
 func recoverPanic() {
