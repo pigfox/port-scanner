@@ -11,40 +11,33 @@ import (
 
 // sendFunc for side-effect testing
 var sendFunc func(Email) = func(e Email) {}
-
-// sendImpl is the actual implementation, overridable for testing
 var sendImpl func(Email) int = func(p Email) int {
 	jsonData, err := createPayload(p)
 	if err != nil {
 		fmt.Println("Error creating JSON payload:", err)
 		return 500
 	}
-
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", brevo.URL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		fmt.Println("Error creating request:", err)
 		return 500
 	}
-
 	req.Header.Add("accept", "application/json")
 	req.Header.Add("api-key", brevo.APIKEY)
 	req.Header.Add("content-type", "application/json")
-
 	res, err := client.Do(req)
 	if err != nil {
 		fmt.Println("Error sending request:", err)
 		return 500
 	}
 	defer res.Body.Close()
-
 	return res.StatusCode
 }
 
-// send function uses the mockable implementation
 func send(p Email) int {
-	sendFunc(p)        // For test side-effects
-	return sendImpl(p) // Mockable core logic
+	sendFunc(p)
+	return sendImpl(p)
 }
 
 // createPayload remains unchanged

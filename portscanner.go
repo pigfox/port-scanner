@@ -155,6 +155,7 @@ func main() {
 	flag.Parse()
 
 	email.Msg = "Starting scan from " + *startIP + " to " + *endIP + " on ports " + *portList
+	email.Subject = "Port scan started"
 	send(email)
 
 	// Start the timer
@@ -209,10 +210,8 @@ func main() {
 
 	// Start HTTP server with health check endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK) // Send a 200 OK response
+		w.WriteHeader(http.StatusOK)
 	})
-
-	// Start the HTTP server in a separate goroutine
 	go func() {
 		fmt.Println("Starting HTTP server on :" + port)
 		if err := http.ListenAndServe(":"+port, nil); err != nil {
