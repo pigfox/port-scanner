@@ -25,4 +25,4 @@ go.work.sum
 .env
 #scan_result.txt
 #checkpoint.txt
-#portscanner
+portscanner
