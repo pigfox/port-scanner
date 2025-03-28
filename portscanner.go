@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net"
@@ -154,71 +155,85 @@ func main() {
 	parallelChunks := flag.Bool("parallel", false, "Run chunks in parallel (experimental)")
 	flag.Parse()
 
-	email.Msg = "Starting scan from " + *startIP + " to " + *endIP + " on ports " + *portList
-	email.Subject = "Port scan started"
-	send(email)
-
-	// Start the timer
-	startTime := time.Now()
-
-	// Launch a goroutine to print elapsed time every minute
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(1 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				elapsed := time.Since(startTime)
-				fmt.Printf("Elapsed time: %.0f minutes\n", elapsed.Minutes())
-			case <-done:
-				return
-			}
-		}
-	}()
-
 	ports := parsePorts(*portList)
-	err := scanRange(*startIP, *endIP, ports, *timeout, *maxConcurrent, *chunkSize, *parallelChunks)
-	if err != nil {
-		fmt.Printf("Error during scan: %v\n", err)
-		os.Exit(1)
-	}
 
-	// Stop the timer goroutine
-	close(done)
-
-	// Iterate over results and send email
-	msgBuilder := strings.Builder{}
-	for _, result := range results {
-		if result.Open {
-			msgBuilder.WriteString(fmt.Sprintf("Port %d is open on %s\n\n", result.Port, result.IP))
-		}
-	}
-
-	email.Subject = "Open port summary"
-	email.Msg = msgBuilder.String()
-	send(email)
-
-	// Print total elapsed time
-	elapsed := time.Since(startTime)
-	fmt.Printf("Scan completed in %.2f minutes.\n", elapsed.Minutes())
-
+	// HTTP server setup
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "10000" // Default port if PORT environment variable is not set
+		port = "10000"
 	}
-
-	// Start HTTP server with health check endpoint
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	server := &http.Server{Addr: ":" + port, Handler: mux}
+
 	go func() {
 		fmt.Println("Starting HTTP server on :" + port)
-		if err := http.ListenAndServe(":"+port, nil); err != nil {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("Error starting server: %v\n", err)
 		}
 	}()
 
-	// Block forever to keep the server running
-	select {}
+	// Infinite scan loop
+	for {
+		// Reset global state for each run
+		results = nil
+		checkpoints = nil
+
+		email.Msg = "Starting scan from " + *startIP + " to " + *endIP + " on ports " + *portList
+		send(email)
+
+		startTime := time.Now()
+		done := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(1 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					elapsed := time.Since(startTime)
+					fmt.Printf("Elapsed time: %.0f minutes\n", elapsed.Minutes())
+				case <-done:
+					return
+				}
+			}
+		}()
+
+		err := scanRange(*startIP, *endIP, ports, *timeout, *maxConcurrent, *chunkSize, *parallelChunks)
+		if err != nil {
+			fmt.Printf("Error during scan: %v\n", err)
+			time.Sleep(5 * time.Second) // Brief delay before retrying on error
+			continue
+		}
+
+		close(done)
+
+		msgBuilder := strings.Builder{}
+		for _, result := range results {
+			if result.Open {
+				msgBuilder.WriteString(fmt.Sprintf("Port %d is open on %s\n\n", result.Port, result.IP))
+			}
+		}
+
+		email.Subject = "Open port summary"
+		email.Msg = msgBuilder.String()
+		send(email)
+
+		elapsed := time.Since(startTime)
+		fmt.Printf("Scan completed in %.2f minutes. Restarting...\n", elapsed.Minutes())
+
+		// Optional delay between scans (e.g., to avoid overwhelming the network)
+		time.Sleep(1 * time.Second)
+
+		// For testing, allow exit
+		if os.Getenv("TEST_MODE") == "true" {
+			break // Exit the loop in test mode
+		}
+	}
+
+	// Shutdown server (only reached in TEST_MODE)
+	if err := server.Shutdown(context.Background()); err != nil {
+		fmt.Printf("Error shutting down server: %v\n", err)
+	}
 }

@@ -216,13 +216,18 @@ func TestSaveAndLoadCheckpoint(t *testing.T) {
 func TestScanRange(t *testing.T) {
 	originalSend := sendFunc
 	originalDial := dialTimeout
+	originalImpl := sendImpl
 	defer func() {
 		sendFunc = originalSend
 		dialTimeout = originalDial
+		sendImpl = originalImpl
 	}()
 	sendCalled := 0
 	sendFunc = func(e Email) {
 		sendCalled++
+	}
+	sendImpl = func(e Email) int {
+		return 200 // Mock successful send
 	}
 	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
 		return &net.TCPConn{}, nil
@@ -265,15 +270,22 @@ func TestParsePorts(t *testing.T) {
 // TestMainFunction tests the main function
 func TestMainFunction(t *testing.T) {
 	originalSend := sendFunc
-	defer func() { sendFunc = originalSend }()
+	originalImpl := sendImpl
+	defer func() {
+		sendFunc = originalSend
+		sendImpl = originalImpl
+	}()
 	sendCalled := 0
 	sendFunc = func(e Email) {
 		sendCalled++
 	}
+	sendImpl = func(e Email) int {
+		return 200
+	}
 
-	// Start server in a controlled way
-	srv := &http.Server{Addr: ":10001"}
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	srv := &http.Server{Addr: ":10001", Handler: mux}
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	go func() {
@@ -282,21 +294,21 @@ func TestMainFunction(t *testing.T) {
 		}
 	}()
 
-	// Run main in a goroutine with clean flag state
 	done := make(chan struct{})
+	os.Setenv("TEST_MODE", "true")
+	defer os.Unsetenv("TEST_MODE")
 	go func() {
 		defer recoverPanic()
-		os.Args = []string{"port-scanner"}
+		os.Args = []string{"port-scanner", "-start=192.168.1.1", "-end=192.168.1.10", "-ports=80"}
 		main()
 		close(done)
 	}()
 
-	time.Sleep(100 * time.Millisecond) // Allow main to start
+	time.Sleep(100 * time.Millisecond)
 	if sendCalled == 0 {
 		t.Errorf("main() did not send initial email")
 	}
 
-	// Test health endpoint
 	resp, err := http.Get("http://localhost:10001/health")
 	if err != nil {
 		t.Errorf("Health endpoint failed: %v", err)
@@ -307,11 +319,10 @@ func TestMainFunction(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	// Shutdown server
 	if err := srv.Shutdown(nil); err != nil {
 		t.Errorf("Failed to shutdown server: %v", err)
 	}
-	<-done // Ensure main finishes
+	<-done
 }
 
 // BenchmarkScanPort benchmarks the scanPort function
