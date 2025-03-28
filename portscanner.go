@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/joho/godotenv"
 )
 
 var brevo Brevo
@@ -23,24 +21,6 @@ type ScanResult struct {
 	Port  int
 	Open  bool
 	Error error
-}
-
-func init() {
-	err := godotenv.Load()
-	if err != nil {
-		fmt.Println("Error loading .env file")
-	}
-	brevourl := os.Getenv("BREVO_URL")
-	brevoapi := os.Getenv("BREVO_APIKEY")
-	brevo = Brevo{URL: brevourl, APIKEY: brevoapi}
-	email = Email{
-		SenderName:  "Port Scanner Bot",
-		SenderEmail: os.Getenv("SENDER_EMAIL"),
-		ToName:      "Admin",
-		ToEmail:     os.Getenv("TO_EMAIL"),
-		Subject:     "Port Scan Results",
-		Msg:         "",
-	}
 }
 
 func scanPort(ip string, port int, timeout time.Duration, limiter chan struct{}) ScanResult {
@@ -243,7 +223,8 @@ func parsePorts(portStr string) []int {
 }
 
 func main() {
-	os.Exit(0)
+	fmt.Println("Starting port scanner")
+	//os.Exit(0)
 	//defer recoverPanic()
 	go update()
 	startIP := flag.String("start", "192.168.1.1", "Starting IP address")
@@ -297,17 +278,4 @@ func main() {
 	//os.Remove(*checkpointFile)
 	//remove output file
 	//os.Remove(*outputFile)
-}
-
-func recoverPanic() {
-	if r := recover(); r != nil {
-		fmt.Printf("Recovered from panic: %v\n", r)
-	}
-}
-
-func update() {
-	time.Sleep(12 * time.Hour)
-	email.Subject = "Update"
-	email.Msg = "Updating..."
-	send(email)
 }
