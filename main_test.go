@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,14 +12,27 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Set up environment variables for tests
-	os.Setenv("BREVO_URL", "http://example.com/api/v3/smtp/email")
-	os.Setenv("BREVO_APIKEY", "testkey")
-	os.Setenv("SENDER_EMAIL", "sender@example.com")
-	os.Setenv("TO_EMAIL", "admin@example.com")
-	os.Setenv("PORT", "10001")
+	// Load .env file if it exists, but don’t fail if it doesn’t (tests will mock network calls)
+	_ = godotenv.Load() // Ignore error to allow running without .env
 
-	// Initialize globals with test values
+	// Set minimal test environment variables if not loaded from .env
+	if os.Getenv("BREVO_URL") == "" {
+		os.Setenv("BREVO_URL", "http://example.com/api/v3/smtp/email")
+	}
+	if os.Getenv("BREVO_APIKEY") == "" {
+		os.Setenv("BREVO_APIKEY", "testkey")
+	}
+	if os.Getenv("SENDER_EMAIL") == "" {
+		os.Setenv("SENDER_EMAIL", "sender@example.com")
+	}
+	if os.Getenv("TO_EMAIL") == "" {
+		os.Setenv("TO_EMAIL", "admin@example.com")
+	}
+	if os.Getenv("PORT") == "" {
+		os.Setenv("PORT", "10001")
+	}
+
+	// Initialize globals (normally done by init() in helpers.go)
 	brevo = Brevo{URL: os.Getenv("BREVO_URL"), APIKEY: os.Getenv("BREVO_APIKEY")}
 	email = Email{
 		SenderName:  "Port Scanner Bot",
@@ -96,10 +108,13 @@ func TestRecoverPanic(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	originalSend := sendFunc
 	originalSleep := updateSleepDuration
+	originalImpl := sendImpl
 	defer func() {
 		sendFunc = originalSend
 		updateSleepDuration = originalSleep
+		sendImpl = originalImpl
 	}()
+
 	sendCalled := false
 	sendFunc = func(e Email) {
 		sendCalled = true
@@ -107,6 +122,10 @@ func TestUpdate(t *testing.T) {
 			t.Errorf("update() sent wrong email: %+v", e)
 		}
 	}
+	sendImpl = func(e Email) int {
+		return 200 // Mock successful send, no network call
+	}
+
 	updateSleepDuration = 10 * time.Millisecond
 	done := make(chan struct{})
 	go func() {
@@ -153,15 +172,20 @@ func TestScanPort(t *testing.T) {
 // TestScanChunk tests the scanChunk function
 func TestScanChunk(t *testing.T) {
 	originalDial := dialTimeout
+	originalImpl := sendImpl
+	defer func() {
+		dialTimeout = originalDial
+		sendImpl = originalImpl
+	}()
 	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
 		return &net.TCPConn{}, nil
 	}
-	defer func() { dialTimeout = originalDial }()
+	sendImpl = func(e Email) int {
+		return 200 // Mock send to avoid network calls
+	}
+
 	resultChan := make(chan ScanResult, 10)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go scanChunk(ipToUint32("192.168.1.1"), ipToUint32("192.168.1.2"), []int{80}, 1*time.Millisecond, 2, resultChan)
-	wg.Wait()
+	scanChunk(ipToUint32("192.168.1.1"), ipToUint32("192.168.1.2"), []int{80}, 1*time.Millisecond, 2, resultChan)
 	close(resultChan)
 
 	count := 0
