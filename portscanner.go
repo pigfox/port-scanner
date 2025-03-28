@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -198,4 +199,25 @@ func main() {
 	// Print total elapsed time
 	elapsed := time.Since(startTime)
 	fmt.Printf("Scan completed in %.2f minutes.", elapsed.Minutes())
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "10000" // Default port if PORT environment variable is not set
+	}
+
+	// Start HTTP server with health check endpoint
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // Send a 200 OK response
+	})
+
+	// Start the HTTP server in a separate goroutine
+	go func() {
+		fmt.Println("Starting HTTP server on :" + port)
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
+			fmt.Printf("Error starting server: %v\n", err)
+		}
+	}()
+
+	// Block forever to keep the server running
+	select {}
 }

@@ -23,6 +23,4 @@ go.work.sum
 
 # env file
 .env
-#scan_result.txt
-#checkpoint.txt
 portscanner
