@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"compress/gzip"
 	"flag"
 	"fmt"
 	"net"
@@ -12,16 +10,6 @@ import (
 	"sync"
 	"time"
 )
-
-var brevo Brevo
-var email Email
-
-type ScanResult struct {
-	IP    string
-	Port  int
-	Open  bool
-	Error error
-}
 
 func scanPort(ip string, port int, timeout time.Duration, limiter chan struct{}) ScanResult {
 	limiter <- struct{}{}
@@ -64,47 +52,23 @@ func scanChunk(startIPNum, endIPNum uint32, ports []int, timeout time.Duration, 
 	wg.Wait()
 }
 
-func saveCheckpoint(checkpointFile, lastIP string) error {
-	file, err := os.Create(checkpointFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	_, err = file.WriteString(lastIP + "\n")
-	return err
+func saveCheckpoint(lastIP string) {
+	checkpoints = append(checkpoints, Checkpoint{IP: lastIP})
 }
 
-func loadCheckpoint(checkpointFile string) (string, error) {
-	file, err := os.Open(checkpointFile)
-	if os.IsNotExist(err) {
-		return "", nil
+func loadCheckpoint() string {
+	if len(checkpoints) > 0 {
+		return checkpoints[len(checkpoints)-1].IP
 	}
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	if scanner.Scan() {
-		return scanner.Text(), nil
-	}
-	return "", nil
+	return ""
 }
 
-func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxConcurrent, chunkSize int, parallelChunks bool, outputFile, checkpointFile string, compress bool) error {
+func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxConcurrent, chunkSize int, parallelChunks bool) error {
 	start := ipToUint32(startIP)
 	end := ipToUint32(endIP)
-	totalIPs := uint64(end) - uint64(start) + 1 // Use uint64 to avoid overflow
-	if totalIPs == 0 {                          // Only 0 if start > end after conversion
-		return fmt.Errorf("invalid IP range: start %s is greater than end %s", startIP, endIP)
-	}
-	fmt.Printf("Total IPs to scan: %d\n", totalIPs)
 
 	// Load checkpoint
-	resumeIP, err := loadCheckpoint(checkpointFile)
-	if err != nil {
-		return fmt.Errorf("failed to load checkpoint: %v", err)
-	}
+	resumeIP := loadCheckpoint()
 	if resumeIP != "" {
 		resume := ipToUint32(resumeIP)
 		if resume >= start && resume <= end {
@@ -112,30 +76,6 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 			fmt.Printf("Resuming from %s\n", resumeIP)
 		}
 	}
-
-	// Recalculate totalIPs after resume
-	totalIPs = uint64(end) - uint64(start) + 1
-	if totalIPs == 0 {
-		fmt.Printf("Scan complete: resumed beyond end IP %s\n", endIP)
-		return nil
-	}
-
-	// Open output file
-	file, err := os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open output file: %v", err)
-	}
-	defer file.Close()
-
-	var writer *bufio.Writer
-	if compress {
-		gzWriter := gzip.NewWriter(file)
-		defer gzWriter.Close()
-		writer = bufio.NewWriter(gzWriter)
-	} else {
-		writer = bufio.NewWriter(file)
-	}
-	defer writer.Flush()
 
 	// Channel for results
 	resultChan := make(chan ScanResult, maxConcurrent)
@@ -154,48 +94,23 @@ func scanRange(startIP, endIP string, ports []int, timeout time.Duration, maxCon
 			scanChunk(startNum, endNum, ports, timeout, maxConcurrent, resultChan)
 		}(chunkStart, chunkEnd)
 
-		// Collect results for this chunk
-		expectedResults := int(chunkEnd-chunkStart+1) * len(ports)
-		fmt.Printf("Expecting %d results for chunk %s to %s\n", expectedResults, uint32ToIP(chunkStart), uint32ToIP(chunkEnd))
-		for i := 0; i < expectedResults; i++ {
+		// Collect results
+		for i := 0; i < int(chunkEnd-chunkStart+1)*len(ports); i++ {
 			result := <-resultChan
+			results = append(results, result) // Store in-memory instead of writing to file
 			if result.Open {
-				line := fmt.Sprintf("Port %d is open on %s\n", result.Port, result.IP)
+				fmt.Printf("Port %d is open on %s\n", result.Port, result.IP)
 				email.Subject = "Open port found"
-				email.Msg = line
+				email.Msg = fmt.Sprintf("Port %d is open on %s", result.Port, result.IP)
 				send(email)
-				if _, err := writer.WriteString(line); err != nil {
-					fmt.Printf("Error writing to file: %v\n", err)
-				}
 			}
 		}
 
 		// Save checkpoint
-		if err := saveCheckpoint(checkpointFile, uint32ToIP(chunkEnd)); err != nil {
-			fmt.Printf("Warning: failed to save checkpoint: %v\n", err)
-		}
-
-		// Progress update
-		processed := uint64(chunkEnd) - uint64(start) + 1
-		percent := float64(processed) / float64(totalIPs) * 100
-		if percent > 100 {
-			percent = 100
-		}
-		fmt.Printf("Progress: %.2f%% complete\n", percent)
-
-		// Flush periodically
-		writer.Flush()
-
-		// Wait if not parallel
-		if !parallelChunks {
-			wg.Wait()
-		}
+		saveCheckpoint(uint32ToIP(chunkEnd))
 	}
 
-	// Wait for all parallel chunks and close channel
-	if parallelChunks {
-		wg.Wait()
-	}
+	wg.Wait()
 	close(resultChan)
 
 	return nil
@@ -224,8 +139,8 @@ func parsePorts(portStr string) []int {
 
 func main() {
 	fmt.Println("Starting port scanner")
-	os.Exit(0)
-	//defer recoverPanic()
+	//os.Exit(0)
+	defer recoverPanic()
 	go update()
 	startIP := flag.String("start", "192.168.1.1", "Starting IP address")
 	endIP := flag.String("end", "192.168.1.10", "Ending IP address")
@@ -234,9 +149,6 @@ func main() {
 	maxConcurrent := flag.Int("concurrent", 1000, "Maximum concurrent scans per chunk")
 	chunkSize := flag.Int("chunk", 1000000, "Number of IPs per chunk (default: 1M)")
 	parallelChunks := flag.Bool("parallel", false, "Run chunks in parallel (experimental)")
-	outputFile := flag.String("output", "scan_results.txt", "Output file for results")
-	checkpointFile := flag.String("checkpoint", "checkpoint.txt", "Checkpoint file for resuming")
-	compress := flag.Bool("compress", false, "Compress output file with gzip")
 	flag.Parse()
 
 	email.Msg = "Starting scan from " + *startIP + " to " + *endIP + " on ports " + *portList
@@ -262,7 +174,7 @@ func main() {
 	}()
 
 	ports := parsePorts(*portList)
-	err := scanRange(*startIP, *endIP, ports, *timeout, *maxConcurrent, *chunkSize, *parallelChunks, *outputFile, *checkpointFile, *compress)
+	err := scanRange(*startIP, *endIP, ports, *timeout, *maxConcurrent, *chunkSize, *parallelChunks)
 	if err != nil {
 		fmt.Printf("Error during scan: %v\n", err)
 		os.Exit(1)
@@ -270,12 +182,20 @@ func main() {
 
 	// Stop the timer goroutine
 	close(done)
+	//iterate over results and send email
+	msgBuilder := strings.Builder{}
+	for _, result := range results {
+		if result.Open {
+			//fmt.Printf("Port %d is open on %s\n", result.Port, result.IP)
+			msgBuilder.WriteString(fmt.Sprintf("Port %d is open on %s\n\n", result.Port, result.IP))
+		}
+	}
+
+	email.Subject = "Open port summary"
+	email.Msg = msgBuilder.String()
+	send(email)
 
 	// Print total elapsed time
 	elapsed := time.Since(startTime)
-	fmt.Printf("Scan completed in %.2f minutes. Results saved to %s\n", elapsed.Minutes(), *outputFile)
-	//remove checkpoint file
-	//os.Remove(*checkpointFile)
-	//remove output file
-	//os.Remove(*outputFile)
+	fmt.Printf("Scan completed in %.2f minutes.", elapsed.Minutes())
 }
