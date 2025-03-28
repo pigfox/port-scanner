@@ -5,18 +5,18 @@ import (
 	"log"
 	"os"
 	"time"
-
-	"github.com/joho/godotenv"
 )
 
 func init() {
+	/* render.com
 	liveENV := os.Getenv("LIVE_ENV")
 	if liveENV != "TRUE" {
 		err := godotenv.Load()
 		if err != nil {
 			log.Fatal("Error loading .env file")
 		}
-	}
+	}*/
+
 	brevoUrl := os.Getenv("BREVO_URL")
 	brevoAPIKey := os.Getenv("BREVO_APIKEY")
 	if brevoUrl == "" || brevoAPIKey == "" {
