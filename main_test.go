@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,10 +13,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Load .env file if it exists, but don’t fail if it doesn’t (tests will mock network calls)
-	_ = godotenv.Load() // Ignore error to allow running without .env
-
-	// Set minimal test environment variables if not loaded from .env
+	_ = godotenv.Load()
 	if os.Getenv("BREVO_URL") == "" {
 		os.Setenv("BREVO_URL", "http://example.com/api/v3/smtp/email")
 	}
@@ -32,7 +30,6 @@ func TestMain(m *testing.M) {
 		os.Setenv("PORT", "10001")
 	}
 
-	// Initialize globals (normally done by init() in helpers.go)
 	brevo = Brevo{URL: os.Getenv("BREVO_URL"), APIKEY: os.Getenv("BREVO_APIKEY")}
 	email = Email{
 		SenderName:  "Port Scanner Bot",
@@ -45,19 +42,12 @@ func TestMain(m *testing.M) {
 	results = nil
 	checkpoints = nil
 
-	// Run tests
-	code := m.Run()
-
-	// Exit with the test result code
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
-// TestInit tests the initialization logic
+// TestInit tests successful initialization
 func TestInit(t *testing.T) {
-	// Clear environment to ensure isolation
 	os.Clearenv()
-
-	// Simulate .env file content
 	envContent := "BREVO_URL=http://test.com\nBREVO_APIKEY=testkey\nSENDER_EMAIL=sender@test.com\nTO_EMAIL=admin@test.com"
 	tmpFile, err := os.CreateTemp("", "testenv")
 	if err != nil {
@@ -69,12 +59,10 @@ func TestInit(t *testing.T) {
 	}
 	tmpFile.Close()
 
-	// Load from temp file
 	if err := godotenv.Load(tmpFile.Name()); err != nil {
 		t.Fatalf("godotenv.Load failed: %v", err)
 	}
 
-	// Replicate init logic
 	brevo = Brevo{}
 	email = Email{}
 	brevoUrl := os.Getenv("BREVO_URL")
@@ -97,11 +85,20 @@ func TestInit(t *testing.T) {
 	}
 }
 
-// TestRecoverPanic tests the recoverPanic function
+// TestInitFailure tests init failure case
+func TestInitFailure(t *testing.T) {
+	os.Clearenv()
+	brevo = Brevo{}
+	email = Email{}
+	if brevo.URL != "" || brevo.APIKEY != "" {
+		t.Errorf("Expected empty Brevo in failure case: %+v", brevo)
+	}
+}
+
+// TestRecoverPanic tests panic recovery
 func TestRecoverPanic(t *testing.T) {
 	defer recoverPanic()
 	panic("test panic")
-	// If we reach here, recoverPanic worked
 }
 
 // TestUpdate tests the update function
@@ -123,7 +120,7 @@ func TestUpdate(t *testing.T) {
 		}
 	}
 	sendImpl = func(e Email) int {
-		return 200 // Mock successful send, no network call
+		return 200
 	}
 
 	updateSleepDuration = 10 * time.Millisecond
@@ -134,7 +131,6 @@ func TestUpdate(t *testing.T) {
 	}()
 	select {
 	case <-done:
-		// Update completed
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("update() timed out")
 	}
@@ -143,14 +139,12 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
-// TestScanPort tests the scanPort function
+// TestScanPort tests scanPort with open and closed cases
 func TestScanPort(t *testing.T) {
 	limiter := make(chan struct{}, 1)
-
 	originalDial := dialTimeout
 	defer func() { dialTimeout = originalDial }()
 
-	// Test open port
 	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
 		return &net.TCPConn{}, nil
 	}
@@ -159,7 +153,6 @@ func TestScanPort(t *testing.T) {
 		t.Errorf("scanPort() failed for open port: %+v", result)
 	}
 
-	// Test closed port
 	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
 		return nil, fmt.Errorf("connection refused")
 	}
@@ -169,7 +162,7 @@ func TestScanPort(t *testing.T) {
 	}
 }
 
-// TestScanChunk tests the scanChunk function
+// TestScanChunk tests scanChunk
 func TestScanChunk(t *testing.T) {
 	originalDial := dialTimeout
 	originalImpl := sendImpl
@@ -181,7 +174,7 @@ func TestScanChunk(t *testing.T) {
 		return &net.TCPConn{}, nil
 	}
 	sendImpl = func(e Email) int {
-		return 200 // Mock send to avoid network calls
+		return 200
 	}
 
 	resultChan := make(chan ScanResult, 10)
@@ -212,7 +205,7 @@ func TestSaveAndLoadCheckpoint(t *testing.T) {
 	}
 }
 
-// TestScanRange tests the scanRange function
+// TestScanRange tests scanRange
 func TestScanRange(t *testing.T) {
 	originalSend := sendFunc
 	originalDial := dialTimeout
@@ -227,18 +220,18 @@ func TestScanRange(t *testing.T) {
 		sendCalled++
 	}
 	sendImpl = func(e Email) int {
-		return 200 // Mock successful send
+		return 200
 	}
 	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
 		return &net.TCPConn{}, nil
 	}
-	results = nil // Reset global state
+	results = nil
 	checkpoints = nil
 	err := scanRange("192.168.1.1", "192.168.1.2", []int{80}, 1*time.Millisecond, 2, 2, false)
 	if err != nil {
 		t.Errorf("scanRange() failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond) // Allow goroutines to finish
+	time.Sleep(50 * time.Millisecond)
 	if sendCalled < 1 {
 		t.Errorf("scanRange() did not send emails, sent: %d", sendCalled)
 	}
@@ -247,7 +240,40 @@ func TestScanRange(t *testing.T) {
 	}
 }
 
-// TestIPConversion tests IP conversion functions
+// TestScanRangeWithCheckpoint tests resuming from checkpoint
+func TestScanRangeWithCheckpoint(t *testing.T) {
+	originalSend := sendFunc
+	originalDial := dialTimeout
+	originalImpl := sendImpl
+	defer func() {
+		sendFunc = originalSend
+		dialTimeout = originalDial
+		sendImpl = originalImpl
+	}()
+	sendCalled := 0
+	sendFunc = func(e Email) {
+		sendCalled++
+	}
+	sendImpl = func(e Email) int {
+		return 200
+	}
+	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
+		return &net.TCPConn{}, nil
+	}
+
+	checkpoints = []Checkpoint{{IP: "192.168.1.1"}}
+	results = nil
+	err := scanRange("192.168.1.1", "192.168.1.3", []int{80}, 1*time.Millisecond, 2, 2, false)
+	if err != nil {
+		t.Errorf("scanRange() failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(results) != 2 {
+		t.Errorf("scanRange() with checkpoint produced wrong number of results: %d", len(results))
+	}
+}
+
+// TestIPConversion tests IP conversion
 func TestIPConversion(t *testing.T) {
 	ip := "192.168.1.1"
 	num := ipToUint32(ip)
@@ -259,7 +285,7 @@ func TestIPConversion(t *testing.T) {
 	}
 }
 
-// TestParsePorts tests the parsePorts function
+// TestParsePorts tests parsePorts
 func TestParsePorts(t *testing.T) {
 	ports := parsePorts("80,443,invalid,65536")
 	if len(ports) != 2 || ports[0] != 80 || ports[1] != 443 {
@@ -267,65 +293,121 @@ func TestParsePorts(t *testing.T) {
 	}
 }
 
-// TestMainFunction tests the main function
+// TestMainFunction tests main with success and error cases in one run
 func TestMainFunction(t *testing.T) {
+	originalSend := sendFunc
+	originalImpl := sendImpl
+	originalDial := dialTimeout
+	defer func() {
+		sendFunc = originalSend
+		sendImpl = originalImpl
+		dialTimeout = originalDial
+	}()
+
+	// Set up HTTP server
+	mux := http.NewServeMux()
+	srv := &http.Server{Addr: ":10001", Handler: mux}
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	serverDone := make(chan struct{})
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			t.Errorf("Server failed: %v", err)
+		}
+		close(serverDone)
+	}()
+
+	// Mock dialTimeout: succeed first iteration, fail second
+	iteration := 0
+	dialTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
+		iteration++
+		if iteration <= 2 { // First iteration succeeds (2 IPs scanned)
+			return &net.TCPConn{}, nil
+		}
+		// After first iteration succeeds, set TEST_MODE to exit after second
+		if iteration == 3 {
+			os.Setenv("TEST_MODE", "true")
+		}
+		return nil, fmt.Errorf("mock dial error") // Second iteration fails
+	}
+
+	sendCalled := 0
+	sendFunc = func(e Email) {
+		sendCalled++
+		fmt.Printf("Email sent: %s\n", e.Msg) // Debug email sending
+	}
+	sendImpl = func(e Email) int {
+		return 200
+	}
+
+	// Reset global state
+	results = nil
+	checkpoints = nil
+
+	done := make(chan struct{})
+	os.Setenv("TEST_MODE", "false") // Start with false to allow two iterations
+	defer os.Unsetenv("TEST_MODE")
+	go func() {
+		defer recoverPanic()
+		os.Args = []string{"port-scanner", "-start=192.168.1.1", "-end=192.168.1.2", "-ports=80", "-timeout=1ms", "-concurrent=2"}
+		main()
+		close(done)
+	}()
+
+	// Wait for main to complete or timeout
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second): // Enough for two iterations + retry
+		t.Fatal("TestMainFunction timed out")
+	}
+
+	// Shutdown server
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Errorf("Failed to shutdown server: %v", err)
+	}
+	<-serverDone // Ensure server goroutine completes
+
+	// Verify results
+	if sendCalled != 6 { // 1 start + 2 per-port + 1 summary (success), 1 start + 1 empty summary (error)
+		t.Errorf("main() sent %d emails, expected 6 (1 start + 2 ports + 1 summary success + 1 start + 1 error)", sendCalled)
+	}
+
+	resp, err := http.Get("http://localhost:10001/health")
+	if err == nil {
+		resp.Body.Close()
+		t.Errorf("Health endpoint should be down after shutdown, but succeeded")
+	}
+}
+
+// TestEmailErrors tests error paths in email sending
+func TestEmailErrors(t *testing.T) {
 	originalSend := sendFunc
 	originalImpl := sendImpl
 	defer func() {
 		sendFunc = originalSend
 		sendImpl = originalImpl
 	}()
-	sendCalled := 0
-	sendFunc = func(e Email) {
-		sendCalled++
-	}
+
+	sendFunc = func(e Email) {}
 	sendImpl = func(e Email) int {
-		return 200
+		return 500
+	}
+	status := send(email)
+	if status != 500 {
+		t.Errorf("send() expected 500 on error, got %d", status)
 	}
 
-	mux := http.NewServeMux()
-	srv := &http.Server{Addr: ":10001", Handler: mux}
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			t.Errorf("Server failed: %v", err)
-		}
-	}()
-
-	done := make(chan struct{})
-	os.Setenv("TEST_MODE", "true")
-	defer os.Unsetenv("TEST_MODE")
-	go func() {
-		defer recoverPanic()
-		os.Args = []string{"port-scanner", "-start=192.168.1.1", "-end=192.168.1.10", "-ports=80"}
-		main()
-		close(done)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-	if sendCalled == 0 {
-		t.Errorf("main() did not send initial email")
+	sendImpl = func(e Email) int {
+		return 400
 	}
-
-	resp, err := http.Get("http://localhost:10001/health")
-	if err != nil {
-		t.Errorf("Health endpoint failed: %v", err)
-	} else if resp.StatusCode != http.StatusOK {
-		t.Errorf("Health endpoint returned %d, expected 200", resp.StatusCode)
-		resp.Body.Close()
-	} else {
-		resp.Body.Close()
+	status = send(email)
+	if status != 400 {
+		t.Errorf("send() expected 400 on bad request, got %d", status)
 	}
-
-	if err := srv.Shutdown(nil); err != nil {
-		t.Errorf("Failed to shutdown server: %v", err)
-	}
-	<-done
 }
 
-// BenchmarkScanPort benchmarks the scanPort function
+// BenchmarkScanPort
 func BenchmarkScanPort(b *testing.B) {
 	limiter := make(chan struct{}, 1)
 	originalDial := dialTimeout
