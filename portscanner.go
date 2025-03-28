@@ -182,6 +182,7 @@ func main() {
 		checkpoints = nil
 
 		email.Msg = "Starting scan from " + *startIP + " to " + *endIP + " on ports " + *portList
+		email.Subject = "Scan started"
 		send(email)
 
 		startTime := time.Now()
